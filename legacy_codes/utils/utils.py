@@ -18,18 +18,71 @@ def sample(config, monitor, events, cpus, t):
     log_data = monitor.query()
     return log_data, raw
 
-def test_sample():
-    num_cpus = os.cpu_count()          # 시스템에 보이는 전체 logical CPU 수
-    cpus = list(range(num_cpus))       # [0, 1, 2, ..., N-1]
-    events = [0]
+def sample_pmu_only(events, cpus, t):
+    """
+    Sample PMU counters only without monitor
+    
+    Args:
+        events: List of event indices
+        cpus: List of CPU indices
+        t: Sampling time in microseconds
+        
+    Returns:
+        Dictionary with PMU counter values
+    """
+    raw = Perf.sys_perf(cpus, events, int(t))
     abbrevs = Perf.get_supported_abbrevs()
-    pmus = Perf.sys_perf(cpus,events,1000000)
+    
     result_dict = {}
     for i, c in enumerate(cpus):
-        for j,e in enumerate(events):
-            name = "cpu{}_{}".format(c,abbrevs[e])
-            result_dict[name] = pmus[i][j]
-    print(result_dict)
+        for j, e in enumerate(events):
+            name = f"cpu{c}_{abbrevs[e]}"
+            result_dict[name] = raw[i][j]
+    
+    return result_dict
+
+def test_sample():
+    """
+    Test PMU sampling with online CPUs only
+    Uses a shorter sampling time (100ms) for quick testing
+    """
+    try:
+        # 온라인 상태인 CPU만 가져오기
+        online_cpus = []
+        num_cpus = os.cpu_count()
+        for i in range(num_cpus):
+            try:
+                with open(f'/sys/devices/system/cpu/cpu{i}/online', 'r') as f:
+                    if f.read().strip() == '1':
+                        online_cpus.append(i)
+            except FileNotFoundError:
+                # CPU0는 online 파일이 없을 수 있음 (항상 온라인)
+                if i == 0:
+                    online_cpus.append(i)
+        
+        if not online_cpus:
+            online_cpus = [0]  # 최소한 CPU0는 사용
+        
+        print(f"Testing with online CPUs: {online_cpus}")
+        
+        events = [0]  # CPU cycles만 측정
+        abbrevs = Perf.get_supported_abbrevs()
+        
+        # 100ms만 측정 (1000000 -> 100000 마이크로초)
+        pmus = Perf.sys_perf(online_cpus, events, 100000)
+        
+        result_dict = {}
+        for i, c in enumerate(online_cpus):
+            for j, e in enumerate(events):
+                name = "cpu{}_{}".format(c, abbrevs[e])
+                result_dict[name] = pmus[i][j]
+        print(result_dict)
+        return result_dict
+    except Exception as e:
+        print(f"Error in test_sample: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 # CPU Cores Utilization
 def parse_core_util(prev_cpu_time, num_cpu):

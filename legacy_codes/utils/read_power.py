@@ -1,7 +1,11 @@
 import os, time, csv, math
 from pathlib import Path
 from typing import Dict, Tuple
-from .utils import read_value
+
+try:
+    from .utils import read_value
+except ImportError:
+    from utils import read_value
 
 # =========================
 # Config

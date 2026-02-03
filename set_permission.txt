@@ -1,0 +1,2 @@
+# power를 정상적으로 읽기 위해 하당 command를 돌리세요.
+sudo chmod a+r /sys/class/hwmon/hwmon4/*_input
