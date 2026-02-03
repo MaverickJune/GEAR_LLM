@@ -158,10 +158,10 @@ class OrinPMCMonitor:
             active = cycles - total_stall
             
             results[cpu] = {
-                'active_pct': (active / cycles) * 100,
-                'frontend_stall_pct': (frontend / cycles) * 100,
-                'backend_stall_pct': (backend / cycles) * 100,
-                'idle_pct': (total_stall / cycles) * 100,
+                'active_pct': (active / cycles),
+                'frontend_stall_pct': (frontend / cycles),
+                'backend_stall_pct': (backend / cycles),
+                'idle_pct': (total_stall / cycles),
             }
         
         self.prev_values = curr

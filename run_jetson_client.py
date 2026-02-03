@@ -3,10 +3,13 @@ import sys
 from pathlib import Path
 import time
 import threading
+import argparse
+import itertools
 
 import subprocess
 from multiprocessing import Process, Pipe, Queue
 from GearLLM.jetson_utils.state_utils import OrinNaiveStateMonitor
+from GearLLM.jetson_utils.dataset_utils import get_hf_dataloader
 
 # Configs for llama.cpp
 LLAMA_PATH = "/home/nxc/wjbang/llama.cpp"
@@ -68,3 +71,78 @@ def run_generation(result_queue, model_path, prompt, n_predict=32, use_instruct=
             'is_success': False,
             'error_code': -1
         })
+
+# Maybe can be used later
+def gear_jetson_argparser():
+    parser = argparse.ArgumentParser(description="GearLLM Jetson Client")
+        
+def test_parallel_generation():
+    instruction_prompt = "\nSummarize the given article within few sentences."
+    generation_result_queue = Queue()
+    n_predict = 200
+    n_threads = 8
+    
+    dataloader = get_hf_dataloader(
+            dataset_name="abisee/cnn_dailymail",
+            name="3.0.0",
+            num_samples=300,
+            split="test",
+            batch_size=1
+        )
+    for batch in itertools.cycle(dataloader):
+        article = "[article]" + batch[0]['article']
+        prompt = article + instruction_prompt
+        # Create generation process
+        gen_process = Process(
+            target=run_generation,
+            args=(generation_result_queue, MODEL_PATH, prompt, n_predict, 
+                True, n_threads, False, LIB_PATH)
+        )
+        
+        # Start generation process and monitoring
+        start_time = time.time()
+        gen_process.start()
+        gen_process.join()
+        print("Generation process finished.")
+        end_time = time.time()
+        
+        # Get generation results
+        if not generation_result_queue.empty():
+            result = generation_result_queue.get()
+            
+            print("\n" + "=" * 80)
+            print("GENERATION RESULTS")
+            print("=" * 80)
+            
+            if result.get('is_success', False):
+                print(f"\nOutput Text:\n{result['output_text']}")
+                print("\n" + "-" * 80)
+                print(f"Statistics:")
+                print(f"  Tokens Generated: {result['n_tokens_generated']}")
+                print(f"  Total Time: {result['total_time_ms']:.2f} ms")
+                print(f"  Tokens/Second: {result['tokens_per_second']:.2f}")
+                print(f"  Average Time/Token: {result['average_time_per_token']:.2f} ms")
+                
+                # Show per-token timing
+                print(f"\nPer-Token Timing (first 10 tokens):")
+                times = result['time_per_token'][:10]
+                for i, time_ms in enumerate(times):
+                    tps = 1000.0 / time_ms if time_ms > 0 else 0
+                    print(f"  Token {i+1:3d}: {time_ms:7.2f} ms ({tps:6.2f} tok/sec)")
+                if len(result['time_per_token']) > 10:
+                    print(f"  ... and {len(result['time_per_token']) - 10} more tokens")
+            else:
+                print(f"Error: Generation failed")
+                if 'error' in result:
+                    print(f"  Error message: {result['error']}")
+                print(f"  Error code: {result.get('error_code', 'unknown')}")
+        else:
+            print("Error: No result received from generation process")
+        
+        # For testing, break after one iteration
+        sys.exit(0)
+    
+if __name__ == "__main__":
+    test_parallel_generation()
+    
+    
