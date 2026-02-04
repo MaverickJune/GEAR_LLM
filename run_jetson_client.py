@@ -126,50 +126,58 @@ def gear_jetson_trainer():
     # Define initial state and action
     prev_state = None
     prev_action = -1
-    
-    while True:
+        
+    # Endless iteration over dataloader
+    for batch in itertools.cycle(dataloader):
         if time.time() - start_time > TRAINING_TIMEOUT_SEC:
             print("Training timeout reached. Exiting.")
             # TODO: Allow graceful shutdown to server (save results + model weights)
             break
         
-        # Endless iteration over dataloader
-        for batch in itertools.cycle(dataloader):
-            article = "[article]" + batch[0]['article']
-            prompt = article + INSTRUCTION_PROMPT
+        article = "[article]" + batch[0]['article']
+        prompt = article + INSTRUCTION_PROMPT
+        
+        gen_process = Process(
+            target=run_generation,
+            args=(generation_result_queue, MODEL_PATH, prompt, N_PREDICT, 
+                True, N_THREADS, False, LIB_PATH)
+        )
+        gen_process.start()
+        
+        # Only monitor while generation is running
+        while monitor_active:
+            if not gen_process.is_alive():
+                monitor_active = False
+                break
             
-            gen_process = Process(
-                target=run_generation,
-                args=(generation_result_queue, MODEL_PATH, prompt, N_PREDICT, 
-                    True, N_THREADS, False, LIB_PATH)
-            )
-            gen_process.start()
+            curr_state = state_monitor.get_state()
+            cpu_utils, cpu_freqs, cpu_temps, total_power = state_monitor.decompose_state(curr_state)
+            reward = cal_cpu_reward(cpu_utils, cpu_temps, cluster_num=8, target_util=TARGET_CPU_UTIL) # 8 cores
             
-            # Only monitor while generation is running
-            while monitor_active:
-                if not gen_process.is_alive():
-                    monitor_active = False
-                    break
-                
-                curr_state = state_monitor.get_state()
-                cpu_utils, cpu_freqs, cpu_temps, total_power = state_monitor.decompose_state(curr_state)
-                reward = cal_cpu_reward(cpu_utils, cpu_temps, cluster_num=8, target_util=TARGET_CPU_UTIL) # 8 cores
-                
-                # Generate an entry for the server-side replay buffer
-                new_entry = (prev_state, prev_action, reward, curr_state)
-                
-                if prev_state is None and prev_action == -1:
-                    prev_state = curr_state
-                    prev_action = random.randint(0, N_ACTIONS - 1)
-                else:
-                    action = comm_client.send_state_get_action(curr_state, additional_info={"new_entry": new_entry})
-                    prev_state = curr_state
-                    prev_action = action
-                
-                # Apply action (set CPU frequencies)
-                target_freq = AVAIL_DQN_CPU_FREQ[prev_action]
-                set_cpu_frequencies(target_freq)
-                time.sleep(0.1)
+            # Generate an entry for the server-side replay buffer
+            new_entry = (prev_state, prev_action, curr_state, reward)
+            
+            if prev_state is None and prev_action == -1:
+                prev_state = curr_state
+                prev_action = random.randint(0, N_ACTIONS - 1)
+                # print(f"action initialized: {prev_action}")
+            else:
+                action = comm_client.send_state_get_action(curr_state, additional_info={"new_entry": new_entry})
+                prev_state = curr_state
+                prev_action = action
+                # print(f"action received: {prev_action}")
+            
+            # Apply action (set CPU frequencies)
+            target_freq = AVAIL_DQN_CPU_FREQ[prev_action]
+            set_cpu_frequencies(target_freq)
+            time.sleep(0.1)
+            
+        gen_process.join()
+        print("Generation process finished.")
+        print("Monitoring stopped")
+        monitor_active = True
+        prev_state = None
+        prev_action = -1
                 
 # Function to test parallel generation
 def test_parallel_generation():
@@ -239,6 +247,7 @@ def test_parallel_generation():
         sys.exit(0)
     
 if __name__ == "__main__":
-    test_parallel_generation()
+    # test_parallel_generation()
+    gear_jetson_trainer()
     
     

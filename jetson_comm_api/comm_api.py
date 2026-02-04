@@ -191,11 +191,13 @@ class DQNCommClient:
         
         # Send state
         if not self._send_message(message):
+            print("Error type 1")
             return None
         
         # Receive action
         response = self._receive_message()
         if response is None:
+            print("Error type 2")
             return None
         
         # Validate response
