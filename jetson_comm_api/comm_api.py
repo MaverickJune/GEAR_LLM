@@ -142,6 +142,27 @@ class DQNCommClient:
                 return None
         return data
     
+    def register_target_util(self, target_cpu_util: float) -> bool:
+        """
+        Register target CPU utilization with DQN server
+        
+        Args:
+            target_cpu_util: Target CPU utilization (0.0 to 1.0)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.is_connected:
+            print("Not connected to server. Call connect() first.")
+            return False
+        
+        message = {
+            'type': 'register_target_util',
+            'target_cpu_util': target_cpu_util
+        }
+        
+        return self._send_message(message)
+    
     def send_state_get_action(self, state: List[float], 
                              additional_info: Optional[Dict[str, Any]] = None) -> Optional[int]:
         """

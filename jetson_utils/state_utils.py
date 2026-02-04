@@ -31,3 +31,10 @@ class OrinNaiveStateMonitor:
         state.extend(self._get_per_core_temperatures())  # 8
         state.append(self._get_total_power())  # 1
         return state  # total 19 dimensions
+    
+    def decompose_state(self, state):
+        cpu_utils = state[0:8]
+        cpu_freqs = state[8:10]
+        cpu_temps = state[10:18]
+        total_power = state[18]
+        return cpu_utils, cpu_freqs, cpu_temps, total_power
