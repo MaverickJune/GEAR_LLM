@@ -4,6 +4,8 @@ Hugging Face 데이터셋을 로드하고 DataLoader를 생성하는 유틸리�
 from datasets import load_dataset
 from torch.utils.data import DataLoader, Dataset
 import torch
+import random
+import numpy as np
 import itertools
 
 '''
@@ -33,11 +35,13 @@ def get_hf_dataloader(
     split: str = "train",
     batch_size: int = 32,
     shuffle: bool = True,
-    num_workers: int = 0,
+    num_workers: int = 4,
+    seed: int = 42,
     **kwargs
 ):
     """
     Hugging Face에서 데이터셋을 가져와서 PyTorch DataLoader를 반환
+    동일한 인자로 호출 시 항상 동일한 데이터셋을 반환 (재현성 보장)
     
     Args:
         dataset_name (str): Hugging Face 데이터셋 이름 (예: "squad", "wikitext", "glue")
@@ -45,24 +49,34 @@ def get_hf_dataloader(
         split (str): 데이터셋 split ("train", "test", "validation" 등, 기본값: "train")
         batch_size (int): 배치 크기 (기본값: 32)
         shuffle (bool): 데이터 셔플 여부 (기본값: True)
-        num_workers (int): DataLoader worker 수 (기본값: 0)
+        num_workers (int): DataLoader worker 수 (기본값: 4)
+        seed (int): 재현성을 위한 랜덤 시드 (기본값: 42, None이면 시드 고정 안함)
         **kwargs: load_dataset에 전달할 추가 인자 (예: subset name)
     
     Returns:
         DataLoader: PyTorch DataLoader 객체
         
     Examples:
-        >>> # SQuAD 데이터셋 100개 샘플 로드
-        >>> dataloader = get_hf_dataloader("squad", num_samples=100, split="train")
+        >>> # SQuAD 데이터셋 100개 샘플 로드 (재현성 보장)
+        >>> dataloader = get_hf_dataloader("squad", num_samples=100, split="train", seed=42)
         
         >>> # WikiText-2 테스트 데이터 50개 샘플 로드
         >>> dataloader = get_hf_dataloader("wikitext", "wikitext-2-raw-v1", 
-        ...                                num_samples=50, split="test")
+        ...                                num_samples=50, split="test", seed=42)
         
         >>> # GLUE의 SST-2 데이터셋 로드
-        >>> dataloader = get_hf_dataloader("glue", "sst2", num_samples=200, split="validation")
+        >>> dataloader = get_hf_dataloader("glue", "sst2", num_samples=200, split="validation", seed=42)
     """
     try:
+        # 재현성을 위한 시드 설정
+        if seed is not None:
+            random.seed(seed)
+            np.random.seed(seed)
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
+            print(f"Random seed set to {seed} for reproducibility")
+        
         # Hugging Face 데이터셋 로드
         print(f"Loading dataset '{dataset_name}' (split: {split})...")
         dataset = load_dataset(dataset_name, split=split, **kwargs)
@@ -77,13 +91,20 @@ def get_hf_dataloader(
         # PyTorch Dataset으로 변환
         pytorch_dataset = HuggingFaceDataset(dataset)
         
+        # 재현성을 위한 generator 설정
+        generator = None
+        if seed is not None:
+            generator = torch.Generator()
+            generator.manual_seed(seed)
+        
         # DataLoader 생성
         dataloader = DataLoader(
             pytorch_dataset,
             batch_size=batch_size,
             shuffle=shuffle,
             num_workers=num_workers,
-            collate_fn=lambda x: x  # 원본 데이터 그대로 반환
+            collate_fn=lambda x: x,  # 원본 데이터 그대로 반환
+            generator=generator  # 재현성을 위한 generator
         )
         
         print(f"DataLoader created with {len(dataloader)} batches (batch_size={batch_size})")

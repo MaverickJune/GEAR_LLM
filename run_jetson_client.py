@@ -9,6 +9,7 @@ import random
 
 import subprocess
 from multiprocessing import Process, Pipe, Queue
+import pandas as pd
 
 from GearLLM.jetson_comm_api.comm_api import DQNCommClient
 
@@ -178,6 +179,139 @@ def gear_jetson_trainer():
         monitor_active = True
         prev_state = None
         prev_action = -1
+        
+def gear_jetson_inference(output_dir="./GearLLM/inference_results"):
+     # Meta Configurations for llama.cpp
+    generation_result_queue = Queue()
+    INSTRUCTION_PROMPT = "\nSummarize the given article within few sentences."
+    N_PREDICT = 200
+    N_THREADS = 8
+    
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Client-side training configurations
+    N_ACTIONS = len(AVAIL_DQN_CPU_FREQ)
+    TARGET_CPU_UTIL = 0.8
+    
+    # Dataloader for CNN/DailyMail
+    dataloader = get_hf_dataloader(
+            dataset_name="abisee/cnn_dailymail",
+            name="3.0.0",
+            num_samples=300,
+            split="test",
+            batch_size=1
+        )
+    
+    state_monitor = OrinNaiveStateMonitor()
+    comm_client = DQNCommClient(
+        server_host="147.46.130.111",  # Replace with actual server IP
+        server_port=61103,
+        timeout=10.0
+    )
+    if not comm_client.connect():
+        print("Failed to connect to server")
+        return
+    
+    # Main inference loop
+    start_time = time.time()
+    monitor_active = True
+    
+    for idx, batch in enumerate(dataloader):
+        article = "[article]" + batch[0]['article']
+        prompt = article + INSTRUCTION_PROMPT
+        
+        gen_process = Process(
+            target=run_generation,
+            args=(generation_result_queue, MODEL_PATH, prompt, N_PREDICT, 
+                True, N_THREADS, False, LIB_PATH)
+        )
+        gen_process.start()
+        
+        # Only monitor while generation is running
+        record_board = {
+            "system_states": [],
+            "tpot": []   
+        }
+        
+        while monitor_active:
+            if not gen_process.is_alive():
+                monitor_active = False
+                break
+            
+            # Get system states
+            curr_state, sampling_time = state_monitor.get_state_and_sampling_time()
+            cpu_utils, cpu_freqs, cpu_temps, total_power = state_monitor.decompose_state(curr_state)
+            record_board["system_states"].append({
+                "timestamp": sampling_time,
+                "cpu_utils": cpu_utils,
+                "cpu_freqs": cpu_freqs,
+                "cpu_temps": cpu_temps,
+                "total_power": total_power
+            })
+            
+            # Set CPU frequency
+            action = comm_client.send_state_get_action(curr_state)
+            target_freq = AVAIL_DQN_CPU_FREQ[action]
+            set_cpu_frequencies(target_freq)
+            time.sleep(0.1)
+            
+        gen_process.join()
+        print(f"\nGeneration process for sample {idx} finished.")
+        monitor_active = True # Re-activate the monitor for the next generation
+        
+        # Analyze and log the results
+        if not generation_result_queue.empty():
+            result = generation_result_queue.get()
+            if result.get('is_success', False):
+                print(f"Tokens Generated: {result['n_tokens_generated']}\n")
+                tpt_times = result['time_per_token']
+                tg_start_times = result['token_start_time']
+                if len(tpt_times) != len(tg_start_times):
+                    raise ValueError(f"Length mismatch between time_per_token and token_start_time, len(tpt)={len(tpt_times)}, len(tg)={len(tg_start_times)}")
+                for i, (tpt, tg_start) in enumerate(zip(tpt_times, tg_start_times)):
+                    record_board['tpot'].append({
+                        "token_index": i,
+                        "time_per_token_ms": tpt,
+                        "token_start_time": tg_start
+                    })
+            else:
+                raise RuntimeError(f"Generation failed with error: {result.get('error_code', 'unknown error')}")
+        else:
+            raise RuntimeError("No generation result received from generation process")
+        
+        # Save record_board to CSV files
+        if record_board["system_states"]:
+            # Flatten system states for CSV
+            flattened_states = []
+            for state in record_board["system_states"]:
+                flat_state = {
+                    "timestamp": state["timestamp"],
+                    "total_power": state["total_power"]
+                }
+                # Flatten cpu_utils, cpu_freqs, cpu_temps lists
+                for i, util in enumerate(state["cpu_utils"]):
+                    flat_state[f"cpu{i}_util"] = util
+                for i, freq in enumerate(state["cpu_freqs"]):
+                    flat_state[f"cpu{i}_freq"] = freq
+                for i, temp in enumerate(state["cpu_temps"]):
+                    flat_state[f"cpu{i}_temp"] = temp
+                flattened_states.append(flat_state)
+            
+            df_states = pd.DataFrame(flattened_states)
+            states_path = os.path.join(output_dir, f"sample_{idx:03d}_system_states.csv")
+            df_states.to_csv(states_path, index=False)
+            print(f"Saved system states to {states_path}")
+        
+        if record_board["tpot"]:
+            df_tpot = pd.DataFrame(record_board["tpot"])
+            tpot_path = os.path.join(output_dir, f"sample_{idx:03d}_token_timing.csv")
+            df_tpot.to_csv(tpot_path, index=False)
+            print(f"Saved token timing to {tpot_path}\n")
+            
+        # print("Debugging, sys exit after one sample")
+        # sys.exit(0)
+        
                 
 # Function to test parallel generation
 def test_parallel_generation():
@@ -248,6 +382,7 @@ def test_parallel_generation():
     
 if __name__ == "__main__":
     # test_parallel_generation()
-    gear_jetson_trainer()
+    # gear_jetson_trainer()
+    gear_jetson_inference()
     
     

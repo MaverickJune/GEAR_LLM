@@ -7,6 +7,10 @@ __pycache__/
 *.so
 !sys_perf.so
 
+# Inference results and checkpoints
+inference_results/
+checkpoint_util*/
+
 # Distribution / packaging
 .Python
 build/

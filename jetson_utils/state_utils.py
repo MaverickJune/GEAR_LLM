@@ -1,4 +1,5 @@
 from . import freq_measurement_utils, power_measurement_utils, stall_measurement_utils
+import time
 
 class OrinNaiveStateMonitor:
     def __init__(self):
@@ -31,6 +32,11 @@ class OrinNaiveStateMonitor:
         state.extend(self._get_per_core_temperatures())  # 8
         state.append(self._get_total_power())  # 1
         return state  # total 19 dimensions
+    
+    def get_state_and_sampling_time(self):
+        state = self.get_state()
+        sampling_time = time.time()
+        return state, sampling_time
     
     def decompose_state(self, state):
         cpu_utils = state[0:8]
